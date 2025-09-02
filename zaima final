@@ -1,0 +1,2072 @@
+; ============================================================
+; GROCERY MANAGEMENT SYSTEM (8086 DOS, MASM/TASM)
+; - Role Select: Admin / Cashier (separate passwords)
+; - Admin: Display List, Update Item Price, Add, Remove, Set Discount (stub), Logout
+; - Cashier: Display List, Process Sale (cart flow), Logout
+; - Price update FIX: find "Tk" marker, replace only the numeric price, pad rest
+;   to keep " Tk - " aligned. Avoids corrupting item names.
+; ============================================================
+
+.model  small
+.stack  100h
+
+.data
+    ; ---------- Main Dashboard ----------
+    main_title      db 10,13,'===== GROCERY MANAGEMENT SYSTEM =====',10,13,'$'
+    role_menu       db '1. Admin Login',10,13
+                    db '2. Cashier Login',10,13
+                    db '3. Exit',10,13
+                    db 'Select Role: $'
+
+    ; ---------- Passwords & Messages ----------
+    admin_pass_msg   db 10,13,'Enter Admin Password: $'
+    cashier_pass_msg db 10,13,'Enter Cashier Password: $'
+    wrong_pass_msg   db 10,13,'Wrong Password! Try Again.',10,13,'$'
+    admin_password   db 'admin123$'
+    cashier_password db 'cash123$'
+    input_password   db 20 dup(0)
+
+    ; ---------- Admin Portal ----------
+    admin_title     db 10,13,'===== ADMIN PORTAL =====',10,13,'$'
+    admin_menu_msg  db '1. Display Grocery List',10,13
+                    db '2. Update Item Price',10,13
+                    db '3. Add Grocery Item',10,13
+                    db '4. Remove Grocery Item',10,13
+                    db '5. Set Discount',10,13
+                    db '6. Log Out',10,13
+                    db 'Enter choice: $'
+
+    ; ---------- Cashier Portal ----------
+    cashier_title    db 10,13,'===== CASHIER PORTAL =====',10,13,'$'
+    cashier_menu_msg db '1. Display Grocery List',10,13
+                     db '2. Process Sale',10,13
+                     db '3. Log Out',10,13
+                     db 'Enter choice: $'
+
+    ; ---------- Generic UI ----------
+    list_title      db 10,13,'===== GROCERY LIST =====',10,13,'$'
+    update_title    db 10,13,'===== UPDATE PRICE =====',10,13,'$'
+    item_num_msg    db 'Item number (1-8): $'
+    new_price_msg   db 10,13,'New price (1-3 digits): $'
+    price_updated   db 10,13,'Price updated successfully!',10,13,'$'
+
+    add_title       db 10,13,'===== ADD ITEM =====',10,13,'$'
+    item_name_msg   db 'Item name: $'
+    weight_msg      db 10,13,'Weight (ex: 1kg) [Enter to skip]: $'
+    price_msg       db 10,13,'Price (digits): $'
+    quantity_msg    db 10,13,'Quantity: $'
+    item_added      db 10,13,'Item added successfully!',10,13,'$'
+
+    remove_title    db 10,13,'===== REMOVE ITEM =====',10,13,'$'
+    remove_num_msg  db 'Item number (1-8): $'
+    quantity_show   db 10,13,'Quantity: $'
+    item_removed    db 10,13,'Item removed successfully!',10,13,'$'
+
+    low_stock_alert db 10,13,'* LOW STOCK ALERT *',10,13,'$'
+
+    invalid_msg     db 10,13,'Invalid choice! Try again.',10,13,'$'
+    item_not_found  db 10,13,'Item not found!',10,13,'$'
+    list_full       db 10,13,'Cannot add more items!',10,13,'$'
+
+    logout_msg      db 10,13,'Logging out...',10,13,'$'
+    newline         db 10,13,'$'
+
+    ; ---------- Items (fixed field; keep " - <price> Tk - <qty>$") ----------
+    item1 db '1-Rice (1kg) - 200 Tk - 25$                      '
+    item2 db '2-Cauliflower - 100 Tk - 30$                     '
+    item3 db '3-Milk (1L) - 300 Tk - 15$                       '
+    item4 db '4-Sugar (1kg) - 150 Tk - 40$                     '
+    item5 db '                                                  '
+    item6 db '                                                  '
+    item7 db '                                                  '
+    item8 db '                                                  '
+
+    item_count      db 4
+    choice          db ?
+    role_choice     db ?
+    selected_item   db ?
+    new_price       db 10 dup(0)
+
+    ; ----------------- Cart / Billing (NEW) -----------------
+    cart            db 512 dup('$')     ; rolling text buffer for bill
+    cart_size       dw 0
+    cart_count      db 0
+    grand_total     dw 0
+
+    ; temp vars
+    tmp_qty         db 0
+    tmp_price       dw 0
+    tmp_line_total  dw 0
+
+    ; UI strings (cashier flow)
+    ps_title        db 10,13,'===== PROCESS SALE =====',10,13,'$'
+    ps_pick_msg     db 'Select item (1-8), X=Clear cart, C=Checkout, B=Back: $'
+    ps_qty_msg      db 10,13,'Quantity (1-9): $'
+    ps_added_msg    db 10,13,'Added to cart.',10,13,'$'
+    ps_cleared_msg  db 10,13,'Cart cleared.',10,13,'$'
+    ps_invalid      db 10,13,'Invalid input! Try again.',10,13,'$'
+
+    bill_title      db 10,13,'===== BILL =====',10,13,'$'
+    bill_header     db 'Item                         Qty   Price   Line',10,13,'$'
+    bill_sep        db '-----------------------------------------------',10,13,'$'
+    bill_total_lbl  db 10,13,'Grand Total: ', '$'
+    press_back_msg  db 10,13,'(Press any key to return)',10,13,'$'
+
+    ; per-line formatting buffer
+    linebuf         db 64 dup('$')   
+    
+; --- Remove/Reduce UI (NEW) ---
+remove_option_msg db 10,13,'1. Remove Item Completely',10,13
+                  db '2. Reduce Quantity',10,13
+                  db 'Choose option: $'
+reduce_qty_msg    db 10,13,'Enter quantity to reduce: $'
+current_qty_msg   db 10,13,'Current quantity: $'
+qty_reduced_msg   db 10,13,'Quantity reduced successfully!',10,13,'$'
+invalid_qty_msg   db 10,13,'Invalid quantity!',10,13,'$'
+
+; --- Remove/Reduce state (NEW) ---
+remove_option     db ?
+reduce_amount     db 10 dup(0)
+current_quantity  db ?
+
+
+.code
+
+main proc
+    mov ax, @data
+    mov ds, ax
+
+main_dashboard:
+    ; Show main menu
+    lea dx, main_title
+    mov ah, 9
+    int 21h
+    lea dx, role_menu
+    mov ah, 9
+    int 21h
+
+    ; Read role choice
+    mov ah, 1
+    int 21h
+    mov role_choice, al
+
+    cmp role_choice, '1'
+    je admin_login
+    cmp role_choice, '2'
+    je cashier_login
+    cmp role_choice, '3'
+    je exit_system
+
+    lea dx, invalid_msg
+    mov ah, 9
+    int 21h
+    jmp main_dashboard
+
+; ---------- Auth ----------
+admin_login:
+    lea dx, admin_pass_msg
+    mov ah, 9
+    int 21h
+
+    call input_password_proc
+    call verify_admin_password
+    cmp al, 1
+    je admin_portal
+
+    lea dx, wrong_pass_msg
+    mov ah, 9
+    int 21h
+    jmp main_dashboard
+
+cashier_login:
+    lea dx, cashier_pass_msg
+    mov ah, 9
+    int 21h
+
+    call input_password_proc
+    call verify_cashier_password
+    cmp al, 1
+    je cashier_portal
+
+    lea dx, wrong_pass_msg
+    mov ah, 9
+    int 21h
+    jmp main_dashboard
+
+exit_system:
+    lea dx, logout_msg
+    mov ah, 9
+    int 21h
+    jmp exit_program
+
+; ---------- Cashier ----------
+cashier_portal:
+    lea dx, cashier_title
+    mov ah, 9
+    int 21h
+    lea dx, cashier_menu_msg
+    mov ah, 9
+    int 21h
+
+    mov ah, 1
+    int 21h
+    mov choice, al
+
+    cmp choice, '1'
+    je display_list
+    cmp choice, '2'
+    je process_sale
+    cmp choice, '3'
+    je logout
+
+    lea dx, invalid_msg
+    mov ah, 9
+    int 21h
+    jmp cashier_portal
+
+; ---------- Cashier: Process Sale ----------
+process_sale:
+    lea dx, ps_title
+    mov ah, 9
+    int 21h
+
+ps_loop:
+    ; simple header + list
+    mov ah, 9
+    lea dx, bill_sep
+    int 21h
+    mov ah, 9
+    lea dx, list_title
+    int 21h
+    call display_list_inline
+
+    lea dx, ps_pick_msg
+    mov ah, 9
+    int 21h
+
+    ; read choice
+    mov ah, 1
+    int 21h
+    mov bl, al
+
+    cmp bl, 'B'
+    je ps_back
+    cmp bl, 'b'
+    je ps_back
+
+    cmp bl, 'X'
+    je ps_clear
+    cmp bl, 'x'
+    je ps_clear
+
+    cmp bl, 'C'
+    je ps_checkout
+    cmp bl, 'c'
+    je ps_checkout
+
+    ; '1'..'8' => pick item
+    cmp bl, '1'
+    jb ps_bad
+    cmp bl, '8'
+    ja ps_bad
+
+    mov selected_item, bl
+
+    lea dx, ps_qty_msg
+    mov ah, 9
+    int 21h
+
+    mov ah, 1
+    int 21h
+    cmp al, '1'
+    jb ps_bad
+    cmp al, '9'
+    ja ps_bad
+    sub al, '0'
+    mov tmp_qty, al
+
+    ; build line, update totals
+    call parse_selected_price
+    call append_cart_line
+
+    lea dx, ps_added_msg
+    mov ah, 9
+    int 21h
+    jmp ps_loop
+
+ps_clear:
+    call clear_cart_proc
+    lea dx, ps_cleared_msg
+    mov ah, 9
+    int 21h
+    jmp ps_loop
+
+ps_bad:
+    lea dx, ps_invalid
+    mov ah, 9
+    int 21h
+    jmp ps_loop
+
+ps_checkout:
+    call show_bill_and_wait
+    jmp cashier_portal
+
+ps_back:
+    jmp cashier_portal
+
+; ---------- Admin ----------
+admin_portal:
+    call check_low_stock
+
+    lea dx, admin_title
+    mov ah, 9
+    int 21h
+    lea dx, admin_menu_msg
+    mov ah, 9
+    int 21h
+
+    mov ah, 1
+    int 21h
+    mov choice, al
+
+    cmp choice, '1'
+    je display_list
+    cmp choice, '2'
+    je update_price
+    cmp choice, '3'
+    je add_item
+    cmp choice, '4'
+    je remove_item
+    cmp choice, '5'
+    je set_discount
+    cmp choice, '6'
+    je logout
+
+    lea dx, invalid_msg
+    mov ah, 9
+    int 21h
+    jmp admin_portal
+
+set_discount:
+    ; Stub
+    lea dx, item_added
+    mov ah, 9
+    int 21h
+    jmp admin_portal
+
+; ---------- List ----------
+display_list:
+    lea dx, list_title
+    mov ah, 9
+    int 21h
+
+    lea dx, item1
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+
+    lea dx, item2
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+
+    lea dx, item3
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+
+    lea dx, item4
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+
+    cmp byte ptr [item5], '5'
+    jl skip5
+    lea dx, item5
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+skip5:
+    cmp byte ptr [item6], '6'
+    jl skip6
+    lea dx, item6
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+skip6:
+    cmp byte ptr [item7], '7'
+    jl skip7
+    lea dx, item7
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+skip7:
+    cmp byte ptr [item8], '8'
+    jl skip8
+    lea dx, item8
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+skip8:
+
+    cmp role_choice, '1'
+    je admin_portal
+    jmp cashier_portal
+
+; ---------- Update Price (FIXED LOGIC) ----------
+update_price:
+    lea dx, update_title
+    mov ah, 9
+    int 21h
+
+    lea dx, item_num_msg
+    mov ah, 9
+    int 21h
+
+    mov ah, 1
+    int 21h
+    mov selected_item, al
+
+    lea dx, new_price_msg
+    mov ah, 9
+    int 21h
+
+    call get_price_chars
+    call update_selected_price
+
+    lea dx, price_updated
+    mov ah, 9
+    int 21h
+    jmp admin_portal
+
+; ---------- Add ----------
+add_item:
+    cmp item_count, 8
+    jge list_is_full
+
+    lea dx, add_title
+    mov ah, 9
+    int 21h
+
+    call add_new_grocery
+
+    lea dx, item_added
+    mov ah, 9
+    int 21h
+    jmp admin_portal
+
+list_is_full:
+    lea dx, list_full
+    mov ah, 9
+    int 21h
+    jmp admin_portal
+
+; ---------- Remove ----------
+; ---------- Remove (enhanced: complete remove OR reduce quantity) ----------
+remove_item:
+    lea dx, remove_title
+    mov ah, 9
+    int 21h
+
+    lea dx, remove_num_msg
+    mov ah, 9
+    int 21h
+
+    mov ah, 1
+    int 21h
+    mov selected_item, al
+
+    ; show current quantity first
+    call show_current_quantity
+
+    ; ask option
+    lea dx, remove_option_msg
+    mov ah, 9
+    int 21h
+
+    mov ah, 1
+    int 21h
+    mov remove_option, al
+
+    cmp remove_option, '1'
+    je ri_complete_remove
+    cmp remove_option, '2'
+    je ri_reduce_quantity
+
+    ; invalid option -> back to admin portal
+    lea dx, invalid_msg
+    mov ah, 9
+    int 21h
+    jmp admin_portal
+
+ri_complete_remove:
+    call remove_selected_item
+    lea dx, item_removed
+    mov ah, 9
+    int 21h
+    jmp admin_portal
+
+ri_reduce_quantity:
+    lea dx, reduce_qty_msg
+    mov ah, 9
+    int 21h
+
+    call get_reduce_amount
+    call perform_quantity_reduction
+
+    ; if input invalid the routine prints a message; otherwise success:
+    lea dx, qty_reduced_msg
+    mov ah, 9
+    int 21h
+    jmp admin_portal
+
+
+; ---------- Logout ----------
+logout:
+    lea dx, logout_msg
+    mov ah, 9
+    int 21h
+    jmp main_dashboard
+
+exit_program:
+    mov ah, 4Ch
+    int 21h
+
+; ============================================================
+; Helpers
+; ============================================================
+
+; read masked password into input_password (ends with '$')
+input_password_proc proc
+    push bx
+    push cx
+    lea bx, input_password
+    mov cx, 0
+pass_input_loop:
+    mov ah, 1
+    int 21h
+    cmp al, 13
+    je pass_input_done
+    ; echo *
+    push ax
+    mov dl, '*'
+    mov ah, 2
+    int 21h
+    pop ax
+    mov [bx], al
+    inc bx
+    inc cx
+    cmp cx, 15
+    jl pass_input_loop
+pass_input_done:
+    mov byte ptr [bx], '$'
+    pop cx
+    pop bx
+    ret
+input_password_proc endp
+
+; compare input_password with admin_password => AL=1/0
+verify_admin_password proc
+    push si
+    push di
+    lea si, input_password
+    lea di, admin_password
+cmp_admin:
+    mov al, [si]
+    mov bl, [di]
+    cmp al, '$'
+    je admin_endcheck
+    cmp bl, '$'
+    je admin_diff
+    cmp al, bl
+    jne admin_diff
+    inc si
+    inc di
+    jmp cmp_admin
+admin_endcheck:
+    cmp bl, '$'
+    je admin_match
+admin_diff:
+    mov al, 0
+    jmp admin_done
+admin_match:
+    mov al, 1
+admin_done:
+    pop di
+    pop si
+    ret
+verify_admin_password endp
+
+; compare input_password with cashier_password => AL=1/0
+verify_cashier_password proc
+    push si
+    push di
+    lea si, input_password
+    lea di, cashier_password
+cmp_cash:
+    mov al, [si]
+    mov bl, [di]
+    cmp al, '$'
+    je cash_endcheck
+    cmp bl, '$'
+    je cash_diff
+    cmp al, bl
+    jne cash_diff
+    inc si
+    inc di
+    jmp cmp_cash
+cash_endcheck:
+    cmp bl, '$'
+    je cash_match
+cash_diff:
+    mov al, 0
+    jmp cash_done
+cash_match:
+    mov al, 1
+cash_done:
+    pop di
+    pop si
+    ret
+verify_cashier_password endp
+
+; LOW STOCK alert if any qty <= 2 (parses after last '-')
+check_low_stock proc
+    push ax
+    push bx
+    push cx
+
+    mov cl, 0
+
+    lea bx, item1
+    call get_item_quantity
+    cmp al, 2
+    jle set_flag
+
+    lea bx, item2
+    call get_item_quantity
+    cmp al, 2
+    jle set_flag
+
+    lea bx, item3
+    call get_item_quantity
+    cmp al, 2
+    jle set_flag
+
+    lea bx, item4
+    call get_item_quantity
+    cmp al, 2
+    jle set_flag
+
+    cmp byte ptr [item5], '5'
+    jl chk6
+    lea bx, item5
+    call get_item_quantity
+    cmp al, 2
+    jle set_flag
+chk6:
+    cmp byte ptr [item6], '6'
+    jl chk7
+    lea bx, item6
+    call get_item_quantity
+    cmp al, 2
+    jle set_flag
+chk7:
+    cmp byte ptr [item7], '7'
+    jl chk8
+    lea bx, item7
+    call get_item_quantity
+    cmp al, 2
+    jle set_flag
+chk8:
+    cmp byte ptr [item8], '8'
+    jl done_cs
+    lea bx, item8
+    call get_item_quantity
+    cmp al, 2
+    jle set_flag
+    jmp done_cs
+
+set_flag:
+    mov cl, 1
+done_cs:
+    cmp cl, 1
+    jne no_alert
+    lea dx, low_stock_alert
+    mov ah, 9
+    int 21h
+no_alert:
+    pop cx
+    pop bx
+    pop ax
+    ret
+check_low_stock endp
+
+; parse quantity digits after last '-' in item string -> AL
+get_item_quantity proc
+    push bx
+    push cx
+    add bx, 40
+find_last_dash:
+    cmp byte ptr [bx], '-'
+    je qty_here
+    dec bx
+    jmp find_last_dash
+qty_here:
+    inc bx
+    inc bx             ; skip "- "
+    mov al, [bx]
+    sub al, '0'
+    inc bx
+    mov cl, [bx]
+    cmp cl, '0'
+    jb single
+    cmp cl, '9'
+    ja single
+    sub cl, '0'
+    mov ch, 10
+    mul ch
+    add al, cl
+single:
+    pop cx
+    pop bx
+    ret
+get_item_quantity endp
+
+; read price into new_price as digits only, max 3, then '$'
+get_price_chars proc
+    push ax
+    push bx
+    push cx
+    lea bx, new_price
+    mov cx, 0
+price_loop:
+    mov ah, 1
+    int 21h
+    cmp al, 13
+    je price_done
+    cmp al, '0'
+    jb price_loop
+    cmp al, '9'
+    ja price_loop
+    mov [bx], al
+    inc bx
+    inc cx
+    cmp cx, 3
+    jl price_loop
+price_done:
+    mov byte ptr [bx], '$'
+    pop cx
+    pop bx
+    pop ax
+    ret
+get_price_chars endp
+
+; *** FIXED: safely replace "<price> Tk" number without touching name ***
+update_selected_price proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov al, selected_item
+    cmp al, '1'
+    je  upd_i1
+    cmp al, '2'
+    je  upd_i2
+    cmp al, '3'
+    je  upd_i3
+    cmp al, '4'
+    je  upd_i4
+    cmp al, '5'
+    je  upd_i5
+    cmp al, '6'
+    je  upd_i6
+    cmp al, '7'
+    je  upd_i7
+    cmp al, '8'
+    je  upd_i8
+    jmp upd_done
+
+upd_i1: mov bx, OFFSET item1
+        jmp find_tk
+upd_i2: mov bx, OFFSET item2
+        jmp find_tk
+upd_i3: mov bx, OFFSET item3
+        jmp find_tk
+upd_i4: mov bx, OFFSET item4
+        jmp find_tk
+upd_i5: mov bx, OFFSET item5
+        jmp find_tk
+upd_i6: mov bx, OFFSET item6
+        jmp find_tk
+upd_i7: mov bx, OFFSET item7
+        jmp find_tk
+upd_i8: mov bx, OFFSET item8
+        ; fall through
+
+find_tk:
+    mov di, bx
+    mov cx, 60
+scan_loop:
+    cmp byte ptr [di], '$'
+    je upd_done
+    cmp byte ptr [di], 'T'
+    jne next_ch
+    cmp byte ptr [di+1], 'k'
+    jne next_ch
+
+    mov dx, di
+    mov si, dx
+    dec si
+    dec si
+    dec si
+
+back_to_first:
+    mov al, [si]
+    cmp al, '0'
+    jb  not_digit
+    cmp al, '9'
+    jbe step_left
+    jmp not_digit
+step_left:
+    dec si
+    jmp back_to_first
+not_digit:
+    inc si
+
+    mov di, dx
+    dec di
+
+    mov bx, OFFSET new_price
+copy_digits:
+    mov al, [bx]
+    cmp al, '$'
+    je  pad_spaces
+    cmp si, di
+    jae pad_spaces
+    mov [si], al
+    inc si
+    inc bx
+    jmp copy_digits
+
+pad_spaces:
+    cmp si, di
+    jae upd_done
+    mov byte ptr [si], ' '
+    inc si
+    jmp pad_spaces
+
+next_ch:
+    inc di
+    loop scan_loop
+
+upd_done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+update_selected_price endp
+
+; Build a new item in next free slot (5..8)
+add_new_grocery proc
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov al, item_count
+    cmp al, 4
+    je add5
+    cmp al, 5
+    je add6
+    cmp al, 6
+    je add7
+    cmp al, 7
+    je add8
+    jmp add_done
+
+add5: mov bx, OFFSET item5
+      jmp build
+add6: mov bx, OFFSET item6
+      jmp build
+add7: mov bx, OFFSET item7
+      jmp build
+add8: mov bx, OFFSET item8
+      ; fall through
+
+build:
+    mov al, item_count
+    inc al
+    add al, '0'
+    mov [bx], al
+    inc bx
+    mov byte ptr [bx], '-'
+    inc bx
+
+    lea dx, item_name_msg
+    mov ah, 9
+    int 21h
+    call input_string
+
+    lea dx, weight_msg
+    mov ah, 9
+    int 21h
+    mov ah, 1
+    int 21h
+    cmp al, 13
+    je skip_weight
+    mov byte ptr [bx], ' '
+    inc bx
+    mov byte ptr [bx], '('
+    inc bx
+    mov [bx], al
+    inc bx
+    call input_string
+    mov byte ptr [bx], ')'
+    inc bx
+skip_weight:
+
+    mov byte ptr [bx], ' '
+    inc bx
+    mov byte ptr [bx], '-'
+    inc bx
+    mov byte ptr [bx], ' '
+    inc bx
+
+    lea dx, price_msg
+    mov ah, 9
+    int 21h
+    call input_string
+
+    mov byte ptr [bx], ' '
+    inc bx
+    mov byte ptr [bx], 'T'
+    inc bx
+    mov byte ptr [bx], 'k'
+    inc bx
+    mov byte ptr [bx], ' '
+    inc bx
+    mov byte ptr [bx], '-'
+    inc bx
+    mov byte ptr [bx], ' '
+    inc bx
+
+    lea dx, quantity_msg
+    mov ah, 9
+    int 21h
+    call input_string
+
+    mov byte ptr [bx], '$'
+
+    inc item_count
+add_done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+add_new_grocery endp
+
+; read short string (<=15 chars) into [BX]; CR ends
+input_string proc
+    push ax
+    push cx
+    mov cx, 0
+in_str_loop:
+    mov ah, 1
+    int 21h
+    cmp al, 13
+    je in_str_done
+    mov [bx], al
+    inc bx
+    inc cx
+    cmp cx, 15
+    jl in_str_loop
+in_str_done:
+    pop cx
+    pop ax
+    ret
+input_string endp
+
+; show qty for selected_item (parses after last '-')
+show_quantity_before_remove proc
+    push ax
+    push bx
+    push dx
+
+    lea dx, quantity_show
+    mov ah, 9
+    int 21h
+
+    mov al, selected_item
+    cmp al, '1'
+    je  sq1
+    cmp al, '2'
+    je  sq2
+    cmp al, '3'
+    je  sq3
+    cmp al, '4'
+    je  sq4
+    cmp al, '5'
+    je  sq5
+    cmp al, '6'
+    je  sq6
+    cmp al, '7'
+    je  sq7
+    cmp al, '8'
+    je  sq8
+    jmp sq_done
+
+sq1: mov bx, OFFSET item1
+     jmp showq
+sq2: mov bx, OFFSET item2
+     jmp showq
+sq3: mov bx, OFFSET item3
+     jmp showq
+sq4: mov bx, OFFSET item4
+     jmp showq
+sq5: mov bx, OFFSET item5
+     jmp showq
+sq6: mov bx, OFFSET item6
+     jmp showq
+sq7: mov bx, OFFSET item7
+     jmp showq
+sq8: mov bx, OFFSET item8
+     ; fall through
+
+showq:
+    add bx, 40
+find_qdash:
+    cmp byte ptr [bx], '-'
+    je qpos
+    dec bx
+    jmp find_qdash
+qpos:
+    inc bx
+    inc bx
+    mov dl, [bx]
+    mov ah, 2
+    int 21h
+    inc bx
+    mov dl, [bx]
+    cmp dl, ' '
+    je sq_done
+    cmp dl, '$'
+    je sq_done
+    cmp dl, 'T'
+    je sq_done
+    mov ah, 2
+    int 21h
+
+sq_done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+show_quantity_before_remove endp
+
+; clear the selected item's 50-char field
+remove_selected_item proc
+    push ax
+    push bx
+    push cx
+
+    mov al, selected_item
+    cmp al, '1'
+    je  clr1
+    cmp al, '2'
+    je  clr2
+    cmp al, '3'
+    je  clr3
+    cmp al, '4'
+    je  clr4
+    cmp al, '5'
+    je  clr5
+    cmp al, '6'
+    je  clr6
+    cmp al, '7'
+    je  clr7
+    cmp al, '8'
+    je  clr8
+    jmp clr_done
+
+clr1: mov bx, OFFSET item1
+      jmp wipe
+clr2: mov bx, OFFSET item2
+      jmp wipe
+clr3: mov bx, OFFSET item3
+      jmp wipe
+clr4: mov bx, OFFSET item4
+      jmp wipe
+clr5: mov bx, OFFSET item5
+      jmp wipe
+clr6: mov bx, OFFSET item6
+      jmp wipe
+clr7: mov bx, OFFSET item7
+      jmp wipe
+clr8: mov bx, OFFSET item8
+      ; fall through
+
+wipe:
+    mov cx, 50
+    mov al, ' '
+wipe_loop:
+    mov [bx], al
+    inc bx
+    loop wipe_loop
+
+clr_done:
+    pop cx
+    pop bx
+    pop ax
+    ret
+remove_selected_item endp
+
+; ------------------------------------------------------------
+; display_list_inline (for cashier flow)
+; ------------------------------------------------------------
+display_list_inline proc
+    push ax
+    push dx
+
+    lea dx, item1
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+
+    lea dx, item2
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+
+    lea dx, item3
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+
+    lea dx, item4
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+
+    cmp byte ptr [item5], '5'
+    jl dl_skip5
+    lea dx, item5
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+dl_skip5:
+    cmp byte ptr [item6], '6'
+    jl dl_skip6
+    lea dx, item6
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+dl_skip6:
+    cmp byte ptr [item7], '7'
+    jl dl_skip7
+    lea dx, item7
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+dl_skip7:
+    cmp byte ptr [item8], '8'
+    jl dl_done
+    lea dx, item8
+    mov ah, 9
+    int 21h
+    lea dx, newline
+    mov ah, 9
+    int 21h
+dl_done:
+    pop dx
+    pop ax
+    ret
+display_list_inline endp
+
+; ------------------------------------------------------------
+; parse_selected_price  (AX = unit price)
+; ------------------------------------------------------------
+parse_selected_price proc
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov al, selected_item
+    cmp al, '1'
+    je  psp_i1
+    cmp al, '2'
+    je  psp_i2
+    cmp al, '3'
+    je  psp_i3
+    cmp al, '4'
+    je  psp_i4
+    cmp al, '5'
+    je  psp_i5
+    cmp al, '6'
+    je  psp_i6
+    cmp al, '7'
+    je  psp_i7
+    cmp al, '8'
+    je  psp_i8
+    xor ax, ax
+    jmp psp_done
+
+psp_i1: mov bx, OFFSET item1
+        jmp psp_find_tk
+psp_i2: mov bx, OFFSET item2
+        jmp psp_find_tk
+psp_i3: mov bx, OFFSET item3
+        jmp psp_find_tk
+psp_i4: mov bx, OFFSET item4
+        jmp psp_find_tk
+psp_i5: mov bx, OFFSET item5
+        jmp psp_find_tk
+psp_i6: mov bx, OFFSET item6
+        jmp psp_find_tk
+psp_i7: mov bx, OFFSET item7
+        jmp psp_find_tk
+psp_i8: mov bx, OFFSET item8
+
+psp_find_tk:
+    mov di, bx
+    mov cx, 60
+psp_scan:
+    cmp byte ptr [di], '$'
+    je psp_zero
+    cmp byte ptr [di], 'T'
+    jne psp_next
+    cmp byte ptr [di+1], 'k'
+    jne psp_next
+
+    ; backtrack to first digit
+    mov si, di
+    dec si
+    dec si
+psp_back:
+    dec si
+    mov al, [si]
+    cmp al, '0'
+    jb  psp_notdigit
+    cmp al, '9'
+    jbe psp_back
+psp_notdigit:
+    inc si              ; SI at first digit
+
+    ; AX = 0; accumulate until space
+    xor ax, ax
+psp_acc:
+    mov dl, [si]
+    cmp dl, '0'
+    jb  psp_done_acc
+    cmp dl, '9'
+    ja  psp_done_acc
+    sub dl, '0'
+    mov bx, 10
+    mul bx              ; DX:AX = AX * 10 (old AX used)
+    mov bl, dl
+    mov bh, 0
+    add ax, bx          ; AX += digit
+    inc si
+    jmp psp_acc
+
+psp_done_acc:
+    jmp psp_set
+
+psp_next:
+    inc di
+    loop psp_scan
+psp_zero:
+    xor ax, ax
+psp_set:
+    mov tmp_price, ax
+psp_done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+parse_selected_price endp
+
+; ------------------------------------------------------------
+; copy_selected_name -> linebuf (padded to 27 chars)
+; ------------------------------------------------------------
+copy_selected_name proc
+    push ax
+    push bx
+    push si
+    push di
+
+    mov di, OFFSET linebuf
+
+    mov al, selected_item
+    cmp al, '1'
+    je  csn_i1
+    cmp al, '2'
+    je  csn_i2
+    cmp al, '3'
+    je  csn_i3
+    cmp al, '4'
+    je  csn_i4
+    cmp al, '5'
+    je  csn_i5
+    cmp al, '6'
+    je  csn_i6
+    cmp al, '7'
+    je  csn_i7
+    cmp al, '8'
+    je  csn_i8
+    jmp csn_done
+
+csn_i1: mov si, OFFSET item1
+        jmp csn_copy
+csn_i2: mov si, OFFSET item2
+        jmp csn_copy
+csn_i3: mov si, OFFSET item3
+        jmp csn_copy
+csn_i4: mov si, OFFSET item4
+        jmp csn_copy
+csn_i5: mov si, OFFSET item5
+        jmp csn_copy
+csn_i6: mov si, OFFSET item6
+        jmp csn_copy
+csn_i7: mov si, OFFSET item7
+        jmp csn_copy
+csn_i8: mov si, OFFSET item8
+
+csn_copy:
+    ; skip leading "digit-"
+    mov al, [si]
+    cmp al, '0'
+    jb  csn_go
+    cmp al, '9'
+    ja  csn_go
+    inc si
+    cmp byte ptr [si], '-'
+    jne csn_go
+    inc si
+
+csn_go:
+csn_loop:
+    mov al, [si]
+    cmp al, '$'
+    je  csn_done
+    cmp al, ' '
+    jne csn_write
+    cmp byte ptr [si+1], '-'
+    jne csn_write
+    cmp byte ptr [si+2], ' '
+    jne csn_write
+    jmp csn_done
+
+csn_write:
+    mov [di], al
+    inc di
+    inc si
+    jmp csn_loop
+
+csn_done:
+    ; pad to 27 chars
+    mov ax, di
+    sub ax, OFFSET linebuf
+    mov bx, 27
+    cmp ax, bx
+    jae csn_out
+csn_pad:
+    mov byte ptr [di], ' '
+    inc di
+    inc ax
+    cmp ax, bx
+    jb  csn_pad
+csn_out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+copy_selected_name endp
+
+; append_cart_line: build formatted line + update totals
+; ------------------------------------------------------------
+append_cart_line proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; 1) Build the printable line into linebuf
+    call copy_selected_name
+    mov di, OFFSET linebuf
+    add di, 27
+
+    mov byte ptr [di], ' '
+    inc di
+    mov byte ptr [di], ' '
+    inc di
+
+    mov al, tmp_qty
+    mov ah, 0
+    call write_u16_r3
+    add di, 3
+    mov byte ptr [di], ' '
+    inc di
+    mov byte ptr [di], ' '
+    inc di
+
+    mov ax, tmp_price
+    call write_u16_r5
+    add di, 5
+    mov byte ptr [di], ' '
+    inc di
+    mov byte ptr [di], ' '
+    inc di
+
+    mov ax, tmp_price
+    mov bl, tmp_qty
+    mov bh, 0
+    mul bx
+    mov tmp_line_total, ax
+
+    mov ax, tmp_line_total
+    call write_u16_r6
+    add di, 6
+
+    mov byte ptr [di], 13
+    inc di
+    mov byte ptr [di], 10
+    inc di
+    mov byte ptr [di], '$'
+
+    ; 2) Append linebuf to cart using SI/DI (valid 8086 addressing)
+    mov si, OFFSET cart
+    mov ax, cart_size
+    add si, ax              ; SI -> end of cart
+
+    mov di, OFFSET linebuf  ; DI -> start of source
+acl_copy:
+    mov al, [di]
+    mov [si], al
+    inc di
+    inc si
+    cmp al, '$'             ; stop after copying the '$'
+    jne acl_copy
+
+    ; 3) Update cart_size by number of bytes just copied
+    mov ax, di
+    sub ax, OFFSET linebuf  ; ax = bytes copied
+    add cart_size, ax
+
+    ; 4) Update running grand total and count
+    mov ax, grand_total
+    add ax, tmp_line_total
+    mov grand_total, ax
+
+    inc cart_count
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+append_cart_line endp
+
+; ------------------------------------------------------------
+; clear_cart_proc
+; ------------------------------------------------------------
+clear_cart_proc proc
+    push ax
+    push di
+    mov cart_size, 0
+    mov grand_total, 0
+    mov cart_count, 0
+    mov di, OFFSET cart
+    mov byte ptr [di], '$'
+    pop di
+    pop ax
+    ret
+clear_cart_proc endp
+
+; ------------------------------------------------------------
+; show_bill_and_wait
+; ------------------------------------------------------------
+show_bill_and_wait proc
+    push ax
+    push dx
+    push si
+
+    lea dx, bill_title
+    mov ah, 9
+    int 21h
+    lea dx, bill_header
+    mov ah, 9
+    int 21h
+    lea dx, bill_sep
+    mov ah, 9
+    int 21h
+
+    mov si, OFFSET cart
+sbw_loop:
+    mov dl, [si]
+    cmp dl, '$'
+    je  sbw_total
+    mov ah, 2
+    int 21h
+    inc si
+    jmp sbw_loop
+
+sbw_total:
+    lea dx, bill_sep
+    mov ah, 9
+    int 21h
+
+    lea dx, bill_total_lbl
+    mov ah, 9
+    int 21h
+
+    mov ax, grand_total
+    call print_u16
+    mov dl, ' '
+    mov ah, 2
+    int 21h
+    mov dl, 'T'
+    mov ah, 2
+    int 21h
+    mov dl, 'k'
+    mov ah, 2
+    int 21h
+
+    lea dx, press_back_msg
+    mov ah, 9
+    int 21h
+
+    mov ah, 1
+    int 21h
+
+    pop si
+    pop dx
+    pop ax
+    ret
+show_bill_and_wait endp
+
+; ------------------------------------------------------------
+; Numeric writers (right-aligned fixed width) + print_u16
+; ------------------------------------------------------------
+write_u16_r3 proc
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    mov cx, 0
+    mov dx, 0
+    cmp ax, 0
+    jne w3_conv
+    mov byte ptr [di], ' '
+    mov byte ptr [di+1], ' '
+    mov byte ptr [di+2], '0'
+    jmp w3_done
+w3_conv:
+w3_loop:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    cmp ax, 0
+    jne w3_loop
+    mov bx, 3
+    cmp cx, bx
+    jae w3_out
+    mov byte ptr [di], ' '
+    inc di
+    mov byte ptr [di], ' '
+    inc di
+w3_out:
+w3_pop:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop w3_pop
+w3_done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+write_u16_r3 endp
+
+write_u16_r5 proc
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    mov cx, 0
+    cmp ax, 0
+    jne w5_conv
+    mov byte ptr [di], ' '
+    mov byte ptr [di+1], ' '
+    mov byte ptr [di+2], ' '
+    mov byte ptr [di+3], ' '
+    mov byte ptr [di+4], '0'
+    jmp w5_done
+w5_conv:
+w5_loop:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    cmp ax, 0
+    jne w5_loop
+    mov bx, 5
+    sub bx, cx
+w5_pad:
+    cmp bx, 0
+    jle w5_emit
+    mov byte ptr [di], ' '
+    inc di
+    dec bx
+    jmp w5_pad
+w5_emit:
+w5_pop:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop w5_pop
+w5_done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+write_u16_r5 endp
+
+write_u16_r6 proc
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    mov cx, 0
+    cmp ax, 0
+    jne w6_conv
+    mov byte ptr [di], ' '
+    mov byte ptr [di+1], ' '
+    mov byte ptr [di+2], ' '
+    mov byte ptr [di+3], ' '
+    mov byte ptr [di+4], ' '
+    mov byte ptr [di+5], '0'
+    jmp w6_done
+w6_conv:
+w6_loop:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    cmp ax, 0
+    jne w6_loop
+    mov bx, 6
+    sub bx, cx
+w6_pad:
+    cmp bx, 0
+    jle w6_emit
+    mov byte ptr [di], ' '
+    inc di
+    dec bx
+    jmp w6_pad
+w6_emit:
+w6_pop:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop w6_pop
+w6_done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+write_u16_r6 endp
+
+print_u16 proc
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    mov cx, 0
+    cmp ax, 0
+    jne pu_loop
+    mov dl, '0'
+    mov ah, 2
+    int 21h
+    jmp pu_done
+pu_loop:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    cmp ax, 0
+    jne pu_loop
+pu_out:
+    pop dx
+    add dl, '0'
+    mov ah, 2
+    int 21h
+    loop pu_out
+pu_done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+print_u16 endp
+
+; ---------- Show current quantity (stores numeric in current_quantity) ----------
+show_current_quantity proc
+    push ax
+    push bx
+    push dx
+
+    lea dx, current_qty_msg
+    mov ah, 9
+    int 21h
+
+    ; pick item base in BX
+    cmp al, '1'
+je  scq_i1
+
+cmp al, '2'
+je  scq_i2
+
+; ...
+cmp al, '8'
+je  scq_i8
+
+    jmp scq_done
+
+scq_i1:
+    mov bx, OFFSET item1
+    jmp scq_find
+
+scq_i2:
+    mov bx, OFFSET item2
+    jmp scq_find
+
+scq_i3:
+    mov bx, OFFSET item3
+    jmp scq_find
+
+scq_i4:
+    mov bx, OFFSET item4
+    jmp scq_find
+
+scq_i5:
+    mov bx, OFFSET item5
+    jmp scq_find
+
+scq_i6:
+    mov bx, OFFSET item6
+    jmp scq_find
+
+scq_i7:
+    mov bx, OFFSET item7
+    jmp scq_find
+
+scq_i8:
+    mov bx, OFFSET item8
+
+scq_find:
+    add bx, 40
+scq_seekdash:
+    cmp byte ptr [bx], '-'
+    je  scq_here
+    dec bx
+    jmp scq_seekdash
+scq_here:
+    inc bx
+    inc bx                  ; skip "- "
+
+    ; print first digit
+    mov dl, [bx]
+    mov ah, 2
+    int 21h
+
+    ; set current_quantity = first digit
+    mov al, [bx]
+    sub al, '0'
+    mov current_quantity, al
+
+    ; maybe second digit
+    inc bx
+    mov dl, [bx]
+    cmp dl, '0'
+    jb  scq_done            ; space or '$' etc.
+    cmp dl, '9'
+    ja  scq_done
+
+    ; print second digit
+    mov ah, 2
+    int 21h
+
+    ; update current_quantity = prev*10 + (dl-'0')
+    sub dl, '0'
+    mov al, current_quantity
+    mov cl, 10
+    mul cl                  ; AL*CL -> AX
+    add al, dl
+    mov current_quantity, al
+
+scq_done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+show_current_quantity endp
+
+
+; ---------- Read reduce amount (1–2 digits) into reduce_amount ----------
+get_reduce_amount proc
+    push ax
+    push bx
+    push cx
+
+    lea bx, reduce_amount
+    mov cx, 0
+gra_loop:
+    mov ah, 1
+    int 21h
+    cmp al, 13
+    je  gra_done
+    ; accept only digits
+    cmp al, '0'
+    jb  gra_loop
+    cmp al, '9'
+    ja  gra_loop
+    mov [bx], al
+    inc bx
+    inc cx
+    cmp cx, 2
+    jl  gra_loop
+gra_done:
+    mov byte ptr [bx], '$'
+    pop cx
+    pop bx
+    pop ax
+    ret
+get_reduce_amount endp
+
+
+; ---------- Perform quantity reduction using current_quantity ----------
+perform_quantity_reduction proc
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; parse reduce_amount -> AL
+    lea bx, reduce_amount
+    mov al, [bx]
+    cmp al, '$'
+    je  pqr_bad
+    sub al, '0'
+    inc bx
+    mov cl, [bx]
+    cmp cl, '$'
+    je  pqr_one
+    sub cl, '0'
+    mov ah, 0
+    mov bl, 10
+    mul bl                 ; AL = (firstdigit)*10
+    add al, cl
+pqr_one:
+    ; AL = reduce value
+
+    ; validate reduce < current_quantity and > 0
+    cmp al, 0
+    jle pqr_bad
+    mov bl, current_quantity
+    cmp al, bl
+    jae pqr_bad
+
+    ; BL = new quantity = current_quantity - reduce
+    sub bl, al
+    ; write back to item string
+    call update_item_quantity
+    jmp pqr_done
+
+pqr_bad:
+    lea dx, invalid_qty_msg
+    mov ah, 9
+    int 21h
+
+pqr_done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+perform_quantity_reduction endp
+
+
+; ---------- Update item quantity digits in-line ----------
+; IN: BL = new quantity (1..99), selected_item already set
+update_item_quantity proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+     ; choose item base -> SI
+    mov al, selected_item
+
+    cmp al, '1'
+    je  uqi1
+
+    cmp al, '2'
+    je  uqi2
+
+    cmp al, '3'
+    je  uqi3
+
+    cmp al, '4'
+    je  uqi4
+
+    cmp al, '5'
+    je  uqi5
+
+    cmp al, '6'
+    je  uqi6
+
+    cmp al, '7'
+    je  uqi7
+
+    cmp al, '8'
+    je  uqi8
+
+    jmp uqi_done
+uqi1:
+    mov si, OFFSET item1
+    jmp uqi_find
+
+uqi2:
+    mov si, OFFSET item2
+    jmp uqi_find
+
+uqi3:
+    mov si, OFFSET item3
+    jmp uqi_find
+
+uqi4:
+    mov si, OFFSET item4
+    jmp uqi_find
+
+uqi5:
+    mov si, OFFSET item5
+    jmp uqi_find
+
+uqi6:
+    mov si, OFFSET item6
+    jmp uqi_find
+
+uqi7:
+    mov si, OFFSET item7
+    jmp uqi_find
+
+uqi8:
+    mov si, OFFSET item8
+    jmp uqi_find
+
+
+uqi_find:
+    add si, 40
+uqi_seek:
+    cmp byte ptr [si], '-'
+    je  uqi_here
+    dec si
+    jmp uqi_seek
+uqi_here:
+    inc si
+    inc si                ; now at first qty digit
+
+    ; BL holds new quantity
+    cmp bl, 10
+    jb  uqi_single
+
+    ; two digits: write tens and ones
+    mov ax, 0
+    mov al, bl
+    mov ah, 0
+    mov cl, 10
+    div cl               ; AX / 10 -> AL=quotient (tens), AH=remainder (ones)
+    add al, '0'
+    mov [si], al
+    inc si
+    add ah, '0'
+    mov [si], ah
+    jmp uqi_done
+
+uqi_single:
+    add bl, '0'
+    mov [si], bl
+    inc si
+    mov byte ptr [si], ' '   ; clear any old second digit
+
+uqi_done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+update_item_quantity endp
+
+
+end main
