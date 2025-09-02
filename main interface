@@ -1,0 +1,314 @@
+###main interface
+
+; ============================================================
+; Grocery POS — UI ONLY (8086, MASM/TASM)  — fixed labels
+; ============================================================
+
+.model  large
+.stack  1000h
+
+.data
+crlf            db 13,10,'$'
+press_any_key   db 13,10,'(Press any key to continue...)$'
+coming_soon     db 13,10,'[ Feature coming soon — UI only ]$'
+
+title_line1     db 13,10,'================= GROCERY POS =================$'
+title_line2     db 13,10,'Select Role:$'
+role_line1      db 13,10,'  1) Admin$'
+role_line2      db 13,10,'  2) Cashier$'
+role_line3      db 13,10,'  3) Exit$'
+role_choice_msg db 13,10,'Enter choice (1-3): $'
+invalid_msg     db 13,10,'Invalid input. Try again.$'
+
+admin_pw_prompt   db 13,10,'Enter Admin password (press ''1''): $'
+cashier_pw_prompt db 13,10,'Enter Cashier password (press ''2''): $'
+wrong_pw          db 13,10,'Incorrect password. Returning to role screen...$'
+
+admin_header    db 13,10,'----------- ADMIN MENU -----------$'
+admin_list1     db 13,10,'  1) Update Item Price$'
+admin_list2     db 13,10,'  2) Add Item$'
+admin_list3     db 13,10,'  3) Remove Item$'
+admin_list4     db 13,10,'  4) View Grocery List$'
+admin_list5     db 13,10,'  5) Low Stock Alert$'
+admin_list6     db 13,10,'  6) Set Discount$'
+admin_list7     db 13,10,'  7) Logout$'
+admin_prompt    db 13,10,'Choose (1-7): $'
+
+cash_header     db 13,10,'----------- CASHIER MENU -----------$'
+cash_list1      db 13,10,'  1) View Grocery List$'
+cash_list2      db 13,10,'  2) Add to Cart$'
+cash_list3      db 13,10,'  3) Clear Cart$'
+cash_list4      db 13,10,'  4) Generate Bill$'
+cash_list5      db 13,10,'  5) Logout$'
+cash_prompt     db 13,10,'Choose (1-5): $'
+
+glist_header    db 13,10,'======= GROCERY LIST (Sample) =======$'
+g1              db 13,10,'  01) Rice (5kg).............. TK ---$'
+g2              db 13,10,'  02) Flour (2kg)............. TK ---$'
+g3              db 13,10,'  03) Sugar (1kg)............. TK ---$'
+g4              db 13,10,'  04) Edible Oil (1L)......... TK ---$'
+g5              db 13,10,'  05) Lentils (1kg)........... TK ---$'
+g6              db 13,10,'  06) Salt (1kg).............. TK ---$'
+g7              db 13,10,'  07) Milk (1L)............... TK ---$'
+g8              db 13,10,'  08) Eggs (12 pcs)........... TK ---$'
+g9              db 13,10,'  09) Bread................... TK ---$'
+g10             db 13,10,'  10) Detergent Powder (1kg).. TK ---$'
+glist_back      db 13,10,'Press ''B'' to go back.$'
+
+bye_msg         db 13,10,'Exiting... Goodbye!$'
+
+.code
+
+; ----- helpers -----
+puts    proc near
+        mov     ah,09h
+        int     21h
+        ret
+puts    endp
+
+getch   proc near
+        mov     ah,08h
+        int     21h
+        ret
+getch   endp
+
+cls     proc near
+        mov     ax,0003h
+        int     10h
+        ret
+cls     endp
+
+pause_any proc near
+        lea     dx, press_any_key
+        call    puts
+        call    getch
+        ret
+pause_any endp
+
+; ----- main -----
+MAIN    proc far
+        mov     ax,@data
+        mov     ds,ax
+
+Role_Screen:
+        call    cls
+        lea     dx, title_line1    ; header
+        call    puts
+        lea     dx, title_line2
+        call    puts
+        lea     dx, role_line1
+        call    puts
+        lea     dx, role_line2
+        call    puts
+        lea     dx, role_line3
+        call    puts
+        lea     dx, role_choice_msg
+        call    puts
+        call    getch
+
+        cmp     al,'1'             ; Admin
+        je      Admin_Login
+        cmp     al,'2'             ; Cashier
+        je      Cash_Login
+        cmp     al,'3'             ; Exit
+        je      Quit_Program
+
+        lea     dx, invalid_msg
+        call    puts
+        call    pause_any
+        jmp     Role_Screen
+
+; --- admin login expects '1' ---
+Admin_Login:
+        call    cls
+        lea     dx, admin_pw_prompt
+        call    puts
+        call    getch
+        cmp     al,'1'
+        jne     Pw_Fail
+        jmp     Admin_Menu
+
+; --- cashier login expects '2' ---
+Cash_Login:
+        call    cls
+        lea     dx, cashier_pw_prompt
+        call    puts
+        call    getch
+        cmp     al,'2'
+        jne     Pw_Fail
+        jmp     Cashier_Menu
+
+Pw_Fail:
+        lea     dx, wrong_pw
+        call    puts
+        call    pause_any
+        jmp     Role_Screen
+
+; ----- ADMIN MENU LOOP -----
+Admin_Menu:
+        call    cls
+        lea     dx, admin_header
+        call    puts
+        lea     dx, admin_list1
+        call    puts
+        lea     dx, admin_list2
+        call    puts
+        lea     dx, admin_list3
+        call    puts
+        lea     dx, admin_list4
+        call    puts
+        lea     dx, admin_list5
+        call    puts
+        lea     dx, admin_list6
+        call    puts
+        lea     dx, admin_list7
+        call    puts
+        lea     dx, admin_prompt
+        call    puts
+        call    getch
+
+        cmp     al,'1'
+        je      Admin_Stub
+        cmp     al,'2'
+        je      Admin_Stub
+        cmp     al,'3'
+        je      Admin_Stub
+        cmp     al,'4'
+        je      Show_Grocery_List_Admin
+        cmp     al,'5'
+        je      Admin_Stub
+        cmp     al,'6'
+        je      Admin_Stub
+        cmp     al,'7'
+        je      Role_Screen
+
+        lea     dx, invalid_msg
+        call    puts
+        call    pause_any
+        jmp     Admin_Menu
+
+Admin_Stub:
+        lea     dx, coming_soon
+        call    puts
+        call    pause_any
+        jmp     Admin_Menu
+
+Show_Grocery_List_Admin:
+        call    cls
+        lea     dx, glist_header
+        call    puts
+        lea     dx, g1
+        call    puts
+        lea     dx, g2
+        call    puts
+        lea     dx, g3
+        call    puts
+        lea     dx, g4
+        call    puts
+        lea     dx, g5
+        call    puts
+        lea     dx, g6
+        call    puts
+        lea     dx, g7
+        call    puts
+        lea     dx, g8
+        call    puts
+        lea     dx, g9
+        call    puts
+        lea     dx, g10
+        call    puts
+        lea     dx, glist_back
+        call    puts
+WaitA:
+        call    getch
+        cmp     al,'b'
+        je      Admin_Menu
+        cmp     al,'B'
+        jne     WaitA
+        jmp     Admin_Menu
+
+; ----- CASHIER MENU LOOP -----
+Cashier_Menu:
+        call    cls
+        lea     dx, cash_header
+        call    puts
+        lea     dx, cash_list1
+        call    puts
+        lea     dx, cash_list2
+        call    puts
+        lea     dx, cash_list3
+        call    puts
+        lea     dx, cash_list4
+        call    puts
+        lea     dx, cash_list5
+        call    puts
+        lea     dx, cash_prompt
+        call    puts
+        call    getch
+
+        cmp     al,'1'
+        je      Show_Grocery_List_Cash
+        cmp     al,'2'
+        je      Cash_Stub
+        cmp     al,'3'
+        je      Cash_Stub
+        cmp     al,'4'
+        je      Cash_Stub
+        cmp     al,'5'
+        je      Role_Screen
+
+        lea     dx, invalid_msg
+        call    puts
+        call    pause_any
+        jmp     Cashier_Menu
+
+Cash_Stub:
+        lea     dx, coming_soon
+        call    puts
+        call    pause_any
+        jmp     Cashier_Menu
+
+Show_Grocery_List_Cash:
+        call    cls
+        lea     dx, glist_header
+        call    puts
+        lea     dx, g1
+        call    puts
+        lea     dx, g2
+        call    puts
+        lea     dx, g3
+        call    puts
+        lea     dx, g4
+        call    puts
+        lea     dx, g5
+        call    puts
+        lea     dx, g6
+        call    puts
+        lea     dx, g7
+        call    puts
+        lea     dx, g8
+        call    puts
+        lea     dx, g9
+        call    puts
+        lea     dx, g10
+        call    puts
+        lea     dx, glist_back
+        call    puts
+WaitC:
+        call    getch
+        cmp     al,'b'
+        je      Cashier_Menu
+        cmp     al,'B'
+        jne     WaitC
+        jmp     Cashier_Menu
+
+; ----- Exit -----
+Quit_Program:
+        call    cls
+        lea     dx, bye_msg
+        call    puts
+        mov     ax,4C00h
+        int     21h
+
+MAIN endp
+end MAIN
